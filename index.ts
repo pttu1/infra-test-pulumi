@@ -2,8 +2,8 @@ import * as pulumi from "@pulumi/pulumi";
 import * as awsx from "@pulumi/awsx";
 import * as aws from "@pulumi/aws";
 
-// define the default vpc info to deploy
-
+// define the defaulgetVpcOutput({ default: true })t&non-default vpc info to deploy
+//const vpc = new awsx.ec2.DefaultVpc();
 const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
     cidrBlock : "10.0.0.0/16",
     subnets: [ 
@@ -14,7 +14,56 @@ const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
     tags: { "Name": "airtek-vpc"}
 });
 
-const cluster = new awsx.ecs.Cluster("cluster", {vpc: airtekvpc, name: "Cluster"});
+
+//Security groups
+
+const websecurityGroup = new aws.ec2.SecurityGroup("web", {
+    vpcId: airtekvpc.id,
+    description: "HTTP access",
+    ingress: [
+      {
+          protocol: "tcp",
+          fromPort: 5000,
+          toPort: 5000,
+          cidrBlocks: ["0.0.0.0/0"],
+      },
+    ],
+    egress: [
+      {
+        protocol: "-1",
+        fromPort: 0,
+        toPort: 0,
+        cidrBlocks: ["0.0.0.0/0"],
+      },
+    ],
+  });
+  
+  //Ingress rule for api
+  const apisecurityGroup = new aws.ec2.SecurityGroup("api", {
+    vpcId: airtekvpc.id,
+    description: "Only allow access from web-ui SG",
+    ingress: [
+      {
+        protocol: "tcp",
+        fromPort: 5000,
+        toPort: 5000,
+        cidrBlocks: ["0.0.0.0/0"],
+        //securityGroups: [websecurityGroup.id],
+      },
+    ],
+    egress: [
+      {
+        protocol: "-1",
+        fromPort: 0,
+        toPort: 0,
+        cidrBlocks: ["0.0.0.0/0"],
+      },
+    ],
+  });
+
+const cluster = new awsx.ecs.Cluster("cluster", {
+    vpc: airtekvpc, 
+    name: "Cluster",});
 const webRepo = new awsx.ecr.Repository("web-repo");
 const apiRepo = new awsx.ecr.Repository("api-repo");
 
@@ -55,20 +104,27 @@ const infraapiService = new aws.servicediscovery.Service("infraapi", {
 });
 
 //Alb
-const alb = new awsx.elasticloadbalancingv2.ApplicationLoadBalancer(
-    "app-lb", { external: true, securityGroups: cluster.securityGroups });
-const atg = alb.createTargetGroup(
-    "app-tg", { port: 5000, protocol: "HTTP", deregistrationDelay: 0 });
-const web = atg.createListener("web", { port: 80 });
+// const alb = new awsx.elasticloadbalancingv2.ApplicationLoadBalancer(
+//     "app-lb", { external: true, securityGroups: cluster.securityGroups});
+// const atg = alb.createTargetGroup(
+//     "app-tg", { port: 5000, protocol: "HTTP", deregistrationDelay: 0 });
+// const web = atg.createListener("web", { port: 80 });
+
+const  nlb = new awsx.lb.NetworkLoadBalancer("alb", 
+{vpc: airtekvpc, external: true });
+const wtg = nlb.createTargetGroup("aitek-tg", {name: "web-tg", port: 5000, protocol: "TCP",});
+const web = wtg.createListener("listener1", { port: 80, protocol: "TCP",  });
 
 
 const apiImage = apiRepo.buildAndPushImage({
     context: "./infra-team-test/", 
    dockerfile: "./infra-team-test/infra-api/Dockerfile",})
-                                                    
+                             
+//api - private subnet. allow inbound traffic from web only
 const infraapi = new awsx.ecs.FargateService("infraapi", {
     cluster,
-    subnets: airtekvpc.publicSubnetIds,
+    subnets: airtekvpc.privateSubnetIds,
+    securityGroups: [apisecurityGroup.id],
     taskDefinitionArgs: {
         containers: {
             infraapi: {
@@ -90,13 +146,13 @@ const webImage = webRepo.buildAndPushImage({
    dockerfile: "./infra-team-test/infra-web/Dockerfile",})
    
 const infraweb = new awsx.ecs.FargateService("infraweb", {
-    subnets: airtekvpc.publicSubnetIds,
     cluster,
+    subnets: airtekvpc.publicSubnetIds,
     taskDefinitionArgs: {
         containers: {
             infraweb: {
                 image: webImage,
-                portMappings: [ {containerPort: 5000} ],
+                portMappings: [ web ],
                 environment: [
                 {
                     name: "ApiAddress",
@@ -114,4 +170,4 @@ const infraweb = new awsx.ecs.FargateService("infraweb", {
 );
 
 
-export const url = pulumi.interpolate`${web.endpoint.hostname}`;
+//export const url = pulumi.interpolate`${web.endpoint.hostname}`;
