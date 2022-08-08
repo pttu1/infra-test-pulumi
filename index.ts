@@ -2,7 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as awsx from "@pulumi/awsx";
 import * as aws from "@pulumi/aws";
 
-// define the defaulgetVpcOutput({ default: true })t&non-default vpc info to deploy
+/******************Create VPC********************/
 //const vpc = new awsx.ec2.DefaultVpc();
 const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
     cidrBlock : "10.0.0.0/16",
@@ -15,11 +15,11 @@ const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
 });
 
 
-//Security groups
-
+/********Firewall/Inbound rules*********/
+//For web. We could create rule for Lb and only allow inbound rule from Lb's SG.
 const websecurityGroup = new aws.ec2.SecurityGroup("web", {
     vpcId: airtekvpc.id,
-    description: "HTTP access",
+    description: "HTTP access from anywhere.",
     ingress: [
       {
           protocol: "tcp",
@@ -47,8 +47,7 @@ const websecurityGroup = new aws.ec2.SecurityGroup("web", {
         protocol: "tcp",
         fromPort: 5000,
         toPort: 5000,
-        cidrBlocks: ["0.0.0.0/0"],
-        //securityGroups: [websecurityGroup.id],
+        securityGroups: [websecurityGroup.id],
       },
     ],
     egress: [
@@ -61,18 +60,21 @@ const websecurityGroup = new aws.ec2.SecurityGroup("web", {
     ],
   });
 
+/***************Create ECS Cluster and ECR Repositories*************/
 const cluster = new awsx.ecs.Cluster("cluster", {
     vpc: airtekvpc, 
     name: "Cluster",});
 const webRepo = new awsx.ecr.Repository("web-repo");
 const apiRepo = new awsx.ecr.Repository("api-repo");
 
-//const
+/******************DNS Namespace and Service Discovery for both services**************/
 const infraPrivateDnsNamespace = new aws.servicediscovery.PrivateDnsNamespace("airtekPrivateDnsNamespace", {
     name: "airtek",
     description: "airtek",
     vpc: airtekvpc.id,
 });
+
+//Web Service discovery
 const infrawebService = new aws.servicediscovery.Service("infraweb", {
     name: "infraweb",
     dnsConfig: {
@@ -88,6 +90,7 @@ const infrawebService = new aws.servicediscovery.Service("infraweb", {
     },
 });
 
+//Api Service discovery
 const infraapiService = new aws.servicediscovery.Service("infraapi", {
     name: "infraapi",
     dnsConfig: {
@@ -103,24 +106,20 @@ const infraapiService = new aws.servicediscovery.Service("infraapi", {
     },
 });
 
-//Alb
-// const alb = new awsx.elasticloadbalancingv2.ApplicationLoadBalancer(
-//     "app-lb", { external: true, securityGroups: cluster.securityGroups});
-// const atg = alb.createTargetGroup(
-//     "app-tg", { port: 5000, protocol: "HTTP", deregistrationDelay: 0 });
-// const web = atg.createListener("web", { port: 80 });
 
+/**************Network LB, Listener rule and TargetGroup**************************/
 const  nlb = new awsx.lb.NetworkLoadBalancer("alb", 
 {vpc: airtekvpc, external: true });
 const wtg = nlb.createTargetGroup("aitek-tg", {name: "web-tg", port: 5000, protocol: "TCP",});
 const web = wtg.createListener("listener1", { port: 80, protocol: "TCP",  });
 
-
+/************Build Api Image and ECS Service***********************/
 const apiImage = apiRepo.buildAndPushImage({
     context: "./infra-team-test/", 
    dockerfile: "./infra-team-test/infra-api/Dockerfile",})
                              
-//api - private subnet. allow inbound traffic from web only
+//api service - private subnet. allow inbound traffic from web only
+//Auto-provisioned capacity, logging, etc.
 const infraapi = new awsx.ecs.FargateService("infraapi", {
     cluster,
     subnets: airtekvpc.privateSubnetIds,
@@ -141,13 +140,16 @@ const infraapi = new awsx.ecs.FargateService("infraapi", {
     },
 });
 
+/************Build Api Image and ECS Service***********************/
 const webImage = webRepo.buildAndPushImage({
     context: "./infra-team-test/", 
    dockerfile: "./infra-team-test/infra-web/Dockerfile",})
-   
+
+//web service - public subnet.
 const infraweb = new awsx.ecs.FargateService("infraweb", {
     cluster,
     subnets: airtekvpc.publicSubnetIds,
+    securityGroups: [websecurityGroup.id],
     taskDefinitionArgs: {
         containers: {
             infraweb: {
@@ -170,4 +172,4 @@ const infraweb = new awsx.ecs.FargateService("infraweb", {
 );
 
 
-//export const url = pulumi.interpolate`${web.endpoint.hostname}`;
+export const url = pulumi.interpolate`${web.endpoint.hostname}`;
