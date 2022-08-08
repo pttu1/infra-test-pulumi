@@ -2,7 +2,9 @@ import * as pulumi from "@pulumi/pulumi";
 import * as awsx from "@pulumi/awsx";
 import * as aws from "@pulumi/aws";
 
-/******************Create VPC********************/
+/*************************************************************
+ ****************************VPC******************************
+ *************************************************************/
 //const vpc = new awsx.ec2.DefaultVpc();
 const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
     cidrBlock : "10.0.0.0/16",
@@ -14,8 +16,9 @@ const airtekvpc = new awsx.ec2.Vpc("airtek-vpc", {
     tags: { "Name": "airtek-vpc"}
 });
 
-
-/********Firewall/Inbound rules*********/
+/*************************************************************
+ **************Firewall/Inbound rules*************************
+ *************************************************************/
 //For web. We could create rule for Lb and only allow inbound rule from Lb's SG.
 const websecurityGroup = new aws.ec2.SecurityGroup("web", {
     vpcId: airtekvpc.id,
@@ -60,14 +63,18 @@ const websecurityGroup = new aws.ec2.SecurityGroup("web", {
     ],
   });
 
-/***************Create ECS Cluster and ECR Repositories*************/
+/*************************************************************
+ ***********Create ECS Cluster and ECR Repositories***********
+ *************************************************************/
 const cluster = new awsx.ecs.Cluster("cluster", {
     vpc: airtekvpc, 
     name: "Cluster",});
 const webRepo = new awsx.ecr.Repository("web-repo");
 const apiRepo = new awsx.ecr.Repository("api-repo");
 
-/******************DNS Namespace and Service Discovery for both services**************/
+/*************************************************************
+ *****DNS Namespace and Service Discovery for both services***
+ *************************************************************/
 const infraPrivateDnsNamespace = new aws.servicediscovery.PrivateDnsNamespace("airtekPrivateDnsNamespace", {
     name: "airtek",
     description: "airtek",
@@ -106,14 +113,17 @@ const infraapiService = new aws.servicediscovery.Service("infraapi", {
     },
 });
 
-
-/**************Network LB, Listener rule and TargetGroup**************************/
+/*************************************************************
+ **********Network LB, Listener rule and TargetGroup**********
+ *************************************************************/
 const  nlb = new awsx.lb.NetworkLoadBalancer("alb", 
 {vpc: airtekvpc, external: true });
 const wtg = nlb.createTargetGroup("aitek-tg", {name: "web-tg", port: 5000, protocol: "TCP",});
 const web = wtg.createListener("listener1", { port: 80, protocol: "TCP",  });
 
-/************Build Api Image and ECS Service***********************/
+/*************************************************************
+ **********Build Api Image and ECS Service*****************
+ *************************************************************/
 const apiImage = apiRepo.buildAndPushImage({
     context: "./infra-team-test/", 
    dockerfile: "./infra-team-test/infra-api/Dockerfile",})
@@ -140,7 +150,9 @@ const infraapi = new awsx.ecs.FargateService("infraapi", {
     },
 });
 
-/************Build Api Image and ECS Service***********************/
+/*************************************************************
+ **********Build Web-UI Image and ECS Service*****************
+ *************************************************************/
 const webImage = webRepo.buildAndPushImage({
     context: "./infra-team-test/", 
    dockerfile: "./infra-team-test/infra-web/Dockerfile",})
